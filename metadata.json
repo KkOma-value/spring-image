@@ -1,0 +1,5 @@
+{
+  "name": "Spring Festival AI Studio",
+  "description": "A Lunar New Year themed AI image generation playground featuring festive styles, greeting card creators, and traditional art generation using Gemini 2.5 Flash Image.",
+  "requestFramePermissions": []
+}
