@@ -12,6 +12,7 @@ export async function proxy(request: NextRequest) {
   const session = getSessionCookie(request);
 
   const isApiAuth = request.nextUrl.pathname.startsWith(apiAuthPrefix);
+  const isApiRoute = request.nextUrl.pathname.startsWith("/api/");
 
   const isPublicRoute = publicRoutes.includes(request.nextUrl.pathname);
 
@@ -19,7 +20,7 @@ export async function proxy(request: NextRequest) {
     return authRoutes.some((path) => request.nextUrl.pathname.startsWith(path));
   };
 
-  if (isApiAuth) {
+  if (isApiAuth || isApiRoute) {
     return NextResponse.next();
   }
 
@@ -33,7 +34,7 @@ export async function proxy(request: NextRequest) {
   }
 
   if (!session && !isPublicRoute) {
-    return NextResponse.redirect(new URL("/login", request.url));
+    return NextResponse.redirect(new URL("/signin", request.url));
   }
 
   return NextResponse.next();

@@ -18,7 +18,9 @@ export default function SpringFestivalStudio() {
   const [isLoading, setIsLoading] = useState(false);
   const [appMode, setAppMode] = useState<AppMode>(AppMode.PLAYGROUND);
   const [loadingMsg, setLoadingMsg] = useState('Initializing...');
-  const [uploadedImage, setUploadedImage] = useState<string | null>(null);
+  const [uploadedImageUrl, setUploadedImageUrl] = useState<string | null>(null);
+  const [uploadedImageBase64, setUploadedImageBase64] = useState<string | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // --- EFFECTS ---
@@ -49,7 +51,7 @@ export default function SpringFestivalStudio() {
   };
 
   const handleGenerate = async () => {
-    if (!prompt.trim() && !uploadedImage) {
+    if (!prompt.trim() && !uploadedImageBase64) {
       alert("Please enter a prompt or upload an image.");
       return;
     }
@@ -67,7 +69,7 @@ export default function SpringFestivalStudio() {
         prompt: prompt || "A festive Chinese New Year scene",
         styleId: selectedStyle,
         aspectRatio: aspectRatio,
-        imageBase64: uploadedImage || undefined
+        imageBase64: uploadedImageBase64 || undefined
       });
       setGeneratedImage(result);
     } catch (error) {
@@ -83,28 +85,74 @@ export default function SpringFestivalStudio() {
     setPrompt(randomPrompt);
   };
 
+  const readFileAsDataUrl = (file: File) =>
+    new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = () => reject(new Error("Failed to read file."));
+      reader.readAsDataURL(file);
+    });
+
+  const uploadToBlob = async (file: File) => {
+    const formData = new FormData();
+    formData.append("file", file);
+
+    const response = await fetch("/api/upload", {
+      method: "POST",
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.error || "Upload failed.");
+    }
+
+    return (await response.json()) as { url: string };
+  };
+
+  const handleFile = async (file: File) => {
+    if (!file.type.startsWith("image/")) {
+      alert("Please upload an image file.");
+      return;
+    }
+
+    setIsUploading(true);
+
+    try {
+      const [base64, uploadResult] = await Promise.all([
+        readFileAsDataUrl(file),
+        uploadToBlob(file),
+      ]);
+
+      setUploadedImageBase64(base64);
+      setUploadedImageUrl(uploadResult.url);
+    } catch (error) {
+      console.error(error);
+      alert("Failed to upload image. Please try again.");
+      setUploadedImageBase64(null);
+      setUploadedImageUrl(null);
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setUploadedImage(reader.result as string);
-      };
-      reader.readAsDataURL(file);
+      void handleFile(file);
     }
   };
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     const file = e.dataTransfer.files?.[0];
-    if (file && file.type.startsWith('image/')) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setUploadedImage(reader.result as string);
-      };
-      reader.readAsDataURL(file);
+    if (file) {
+      void handleFile(file);
     }
   };
+
+  const previewImage = uploadedImageUrl ?? uploadedImageBase64;
+  const hasUploadedImage = Boolean(previewImage);
 
   // --- RENDER SECTIONS ---
 
@@ -232,7 +280,7 @@ export default function SpringFestivalStudio() {
           <div className="lg:col-span-5 space-y-6">
             {/* Image Upload Section */}
             <div
-              className={`glass-panel p-6 rounded-2xl transition-all ${uploadedImage ? 'border-cny-gold/50 bg-cny-gold/5' : 'border-dashed'}`}
+              className={`glass-panel p-6 rounded-2xl transition-all ${hasUploadedImage ? 'border-cny-gold/50 bg-cny-gold/5' : 'border-dashed'}`}
               onDragOver={(e) => e.preventDefault()}
               onDrop={handleDrop}
             >
@@ -241,9 +289,15 @@ export default function SpringFestivalStudio() {
                   <Icons.Camera className="w-5 h-5" />
                   Reference Image
                 </label>
-                {uploadedImage && (
+                {hasUploadedImage && (
                   <button
-                    onClick={() => setUploadedImage(null)}
+                    onClick={() => {
+                      setUploadedImageUrl(null);
+                      setUploadedImageBase64(null);
+                      if (fileInputRef.current) {
+                        fileInputRef.current.value = "";
+                      }
+                    }}
                     className="text-xs text-red-400 hover:text-red-300 flex items-center gap-1"
                   >
                     <Icons.X className="w-3 h-3" />
@@ -252,7 +306,7 @@ export default function SpringFestivalStudio() {
                 )}
               </div>
 
-              {!uploadedImage ? (
+              {!hasUploadedImage ? (
                 <div
                   onClick={() => fileInputRef.current?.click()}
                   className="border-2 border-dashed border-white/20 rounded-xl p-8 flex flex-col items-center justify-center cursor-pointer hover:bg-white/5 transition-colors group"
@@ -260,12 +314,14 @@ export default function SpringFestivalStudio() {
                   <div className="w-12 h-12 bg-white/10 rounded-full flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
                     <Icons.UploadCloud className="w-6 h-6 text-cny-gold" />
                   </div>
-                  <p className="text-sm font-medium text-white">Click to upload or drag & drop</p>
+                  <p className="text-sm font-medium text-white">
+                    {isUploading ? "Uploading..." : "Click to upload or drag & drop"}
+                  </p>
                   <p className="text-xs text-gray-400 mt-1">Transform your selfies or pets!</p>
                 </div>
               ) : (
                 <div className="relative w-full h-48 rounded-xl overflow-hidden border border-white/20 group">
-                  <img src={uploadedImage} alt="Reference" className="w-full h-full object-cover" />
+                  <img src={previewImage || ""} alt="Reference" className="w-full h-full object-cover" />
                   <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                     <button
                       onClick={() => fileInputRef.current?.click()}
@@ -290,7 +346,7 @@ export default function SpringFestivalStudio() {
               <div className="flex justify-between items-center mb-4">
                 <label className="text-cny-gold font-serif text-lg flex items-center gap-2">
                   <Icons.Wand2 className="w-5 h-5" />
-                  {uploadedImage ? "Add Instructions (Optional)" : "Describe Your Vision"}
+                  {hasUploadedImage ? "Add Instructions (Optional)" : "Describe Your Vision"}
                 </label>
                 <button
                   onClick={handleSurpriseMe}
@@ -303,7 +359,7 @@ export default function SpringFestivalStudio() {
               <textarea
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
-                placeholder={uploadedImage ? "e.g., Make it look like a traditional paper cutting, add red lanterns in background" : "Describe your festive image... e.g., 'A golden snake coiled around a lucky coin stack'"}
+                placeholder={hasUploadedImage ? "e.g., Make it look like a traditional paper cutting, add red lanterns in background" : "Describe your festive image... e.g., 'A golden snake coiled around a lucky coin stack'"}
                 className="w-full h-24 bg-black/30 border border-white/10 rounded-xl p-4 text-white placeholder-gray-500 focus:outline-none focus:border-cny-gold/50 focus:ring-1 focus:ring-cny-gold/50 resize-none transition-all"
               />
             </div>
@@ -329,7 +385,7 @@ export default function SpringFestivalStudio() {
             {/* Mobile Generate Button */}
             <button
               onClick={handleGenerate}
-              disabled={isLoading || (!prompt && !uploadedImage)}
+              disabled={isLoading || isUploading || (!prompt && !uploadedImageBase64)}
               className="w-full lg:hidden py-4 bg-gradient-to-r from-cny-red to-orange-600 rounded-xl font-bold text-white shadow-lg shadow-orange-900/50 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
             >
               {isLoading ? (
@@ -373,7 +429,7 @@ export default function SpringFestivalStudio() {
                 </div>
                 <button
                   onClick={handleGenerate}
-                  disabled={isLoading || (!prompt && !uploadedImage)}
+                  disabled={isLoading || isUploading || (!prompt && !uploadedImageBase64)}
                   className="flex-1 py-4 bg-gradient-to-r from-cny-gold to-yellow-600 rounded-xl font-bold text-xl text-red-950 shadow-[0_0_30px_rgba(255,215,0,0.3)] hover:shadow-[0_0_50px_rgba(255,215,0,0.5)] hover:scale-[1.01] transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-3"
                 >
                   {isLoading ? (
