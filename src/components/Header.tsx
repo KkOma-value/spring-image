@@ -3,9 +3,19 @@
 import { useState, useEffect } from 'react';
 import { Icons } from './ui/Icons';
 import Link from 'next/link';
+import { signOut, useSession } from '@/lib/auth/client';
 
 export const Header = () => {
     const [isScrolled, setIsScrolled] = useState(false);
+    const [isSigningOut, setIsSigningOut] = useState(false);
+    const { data: session } = useSession();
+
+    const displayName =
+        session?.user?.displayUsername ||
+        session?.user?.username ||
+        session?.user?.name ||
+        session?.user?.email ||
+        '';
 
     useEffect(() => {
         const handleScroll = () => {
@@ -36,16 +46,41 @@ export const Header = () => {
                 </div>
 
                 <div className="flex items-center gap-4">
-                    <Link
-                        href="#studio"
-                        className={`hidden md:flex items-center gap-2 text-sm font-medium px-4 py-2 rounded-full transition-all ${isScrolled
-                                ? 'bg-cny-gold text-red-900 hover:bg-white'
-                                : 'bg-white/10 hover:bg-white/20 text-white backdrop-blur-sm'
-                            }`}
-                    >
-                        Create Now
-                        <Icons.ArrowRight className="w-4 h-4" />
-                    </Link>
+                    {displayName ? (
+                        <details className="group relative hidden md:block">
+                            <summary className="flex cursor-pointer list-none items-center gap-2 rounded-full border border-white/15 bg-white/10 px-3 py-2 text-sm text-white backdrop-blur-sm transition hover:border-white/30">
+                                <span className="max-w-[140px] truncate font-semibold text-cny-gold">
+                                    {displayName}
+                                </span>
+                                <Icons.ChevronDown className="h-4 w-4 text-white/80 transition-transform group-open:rotate-180" />
+                            </summary>
+                            <div className="absolute right-0 mt-2 w-40 rounded-2xl border border-white/10 bg-red-950/90 p-2 text-sm text-white shadow-2xl backdrop-blur-xl">
+                                <button
+                                    type="button"
+                                    disabled={isSigningOut}
+                                    onClick={async () => {
+                                        setIsSigningOut(true);
+                                        await signOut();
+                                        setIsSigningOut(false);
+                                    }}
+                                    className="w-full rounded-xl px-3 py-2 text-left text-sm text-white/90 transition hover:bg-white/10 hover:text-white"
+                                >
+                                    Sign Out
+                                </button>
+                            </div>
+                        </details>
+                    ) : (
+                        <Link
+                            href="/signin"
+                            className={`hidden md:flex items-center gap-2 text-sm font-medium px-4 py-2 rounded-full transition-all ${isScrolled
+                                    ? 'bg-cny-gold text-red-900 hover:bg-white'
+                                    : 'bg-white/10 hover:bg-white/20 text-white backdrop-blur-sm'
+                                }`}
+                        >
+                            Sign In
+                            <Icons.ArrowRight className="w-4 h-4" />
+                        </Link>
+                    )}
                 </div>
             </div>
         </header>

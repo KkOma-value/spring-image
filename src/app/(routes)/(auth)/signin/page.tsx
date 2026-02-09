@@ -8,16 +8,31 @@ export const metadata: Metadata = {
 
 export default function SignInPage() {
   return (
-    <div className="flex min-h-screen w-full flex-col items-center justify-center">
-      <div className="flex w-full flex-col rounded-2xl border border-foreground/10 px-8 py-5 md:w-96">
-        <h1>Sign In</h1>
-        <p>Example sign in page using Better Auth</p>
-        <SignInForm />
-        <div className="flex items-center justify-center gap-2">
-          <small>Don&apos;t have account?</small>
-          <Link href={"/signup"} className="text-sm font-bold leading-none">
-            Sign Up
-          </Link>
+    <div className="relative min-h-screen w-full overflow-hidden cny-background text-white">
+      <div className="absolute inset-0 bg-gradient-to-b from-red-950/80 via-red-900/60 to-red-950/80" />
+      <div className="absolute -left-20 top-24 h-56 w-56 rounded-full bg-cny-gold/10 blur-3xl" />
+      <div className="absolute -right-24 bottom-16 h-64 w-64 rounded-full bg-cny-red/30 blur-3xl" />
+
+      <div className="relative z-10 flex min-h-screen w-full flex-col items-center justify-center px-6 py-16">
+        <div className="glass-panel flex w-full max-w-md flex-col rounded-3xl border border-cny-gold/30 px-8 py-10 shadow-2xl">
+          <div className="mb-6 text-center">
+            <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-cny-gold/20 text-cny-gold">
+              SF
+            </div>
+            <h1 className="text-3xl font-serif font-bold text-cny-gold">Sign In</h1>
+            <p className="mt-2 text-sm text-white/70">
+              Access your Spring Festival AI studio.
+            </p>
+          </div>
+
+          <SignInForm />
+
+          <div className="flex items-center justify-center gap-2 text-sm text-white/70">
+            <span>Don&apos;t have an account?</span>
+            <Link href="/signup" className="font-semibold text-cny-gold hover:text-yellow-200">
+              Sign Up
+            </Link>
+          </div>
         </div>
       </div>
     </div>
