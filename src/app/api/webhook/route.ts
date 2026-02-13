@@ -7,153 +7,180 @@ import { db } from "@/db";
 import { creditBalance, creditTransaction, paymentHistory } from "@/db/schema/billing";
 import { CREDIT_PACK_AMOUNT } from "@/lib/billing/constants";
 import { stripe } from "@/lib/stripe";
+import { logger } from "@/lib/logger";
+import { createError, ApplicationError } from "@/lib/error-handler";
 
 export const runtime = "nodejs";
 
-type StripeSession = Stripe.Checkout.Session & {
-    metadata?: { userId?: string; priceId?: string };
-};
+const HANDLED_EVENTS = new Set([
+  "checkout.session.completed",
+  "checkout.session.expired",
+]);
 
-type PaymentIntentInfo = {
-    stripeSessionId: string;
-    amountTotal: number;
-    currency: string;
-    paymentIntentId: string | null;
-    priceId: string;
-};
-
-function extractPaymentIntentInfo(session: StripeSession): PaymentIntentInfo {
-    const stripeSessionId = session.id;
-    const amountTotal = session.amount_total ?? 0;
-    const currency = session.currency ?? "usd";
-
-    let paymentIntentId: string | null = null;
-    if (typeof session.payment_intent === "string") {
-        paymentIntentId = session.payment_intent;
-    } else if (session.payment_intent?.id) {
-        paymentIntentId = session.payment_intent.id;
-    }
-
-    const priceId = session.metadata?.priceId ?? process.env.PRICE_ID ?? "";
-
-    return { stripeSessionId, amountTotal, currency, paymentIntentId, priceId };
+interface StripeSessionMetadata {
+  userId?: string;
+  priceId?: string;
+  quantity?: string;
 }
+
+type StripeSession = Stripe.Checkout.Session & {
+  metadata?: StripeSessionMetadata;
+};
 
 async function isSessionProcessed(stripeSessionId: string): Promise<boolean> {
-    const existing = await db
-        .select({ stripeSessionId: paymentHistory.stripeSessionId })
-        .from(paymentHistory)
-        .where(eq(paymentHistory.stripeSessionId, stripeSessionId));
+  const existing = await db
+    .select({ stripeSessionId: paymentHistory.stripeSessionId })
+    .from(paymentHistory)
+    .where(eq(paymentHistory.stripeSessionId, stripeSessionId));
 
-    return existing.length > 0;
-}
-
-async function ensureCreditBalance(userId: string): Promise<void> {
-    await db
-        .insert(creditBalance)
-        .values({ userId, balance: 0 })
-        .onConflictDoNothing();
-}
-
-async function addCreditsToUser(userId: string): Promise<void> {
-    await db
-        .update(creditBalance)
-        .set({
-            balance: sql`${creditBalance.balance} + ${CREDIT_PACK_AMOUNT}`,
-            updatedAt: new Date(),
-        })
-        .where(eq(creditBalance.userId, userId));
-}
-
-async function recordCreditTransaction(
-    userId: string,
-    stripeSessionId: string,
-): Promise<void> {
-    await db.insert(creditTransaction).values({
-        id: randomUUID(),
-        userId,
-        amount: CREDIT_PACK_AMOUNT,
-        reason: "checkout_session_completed",
-        stripeSessionId,
-    });
-}
-
-async function recordPaymentHistory(
-    userId: string,
-    info: PaymentIntentInfo,
-    status: string,
-): Promise<void> {
-    await db.insert(paymentHistory).values({
-        id: randomUUID(),
-        userId,
-        stripeSessionId: info.stripeSessionId,
-        stripePaymentIntentId: info.paymentIntentId,
-        priceId: info.priceId,
-        amount: info.amountTotal,
-        currency: info.currency,
-        status,
-        creditsGranted: CREDIT_PACK_AMOUNT,
-    });
+  return existing.length > 0;
 }
 
 async function processPayment(session: StripeSession): Promise<void> {
-    const userId = session.metadata?.userId;
-    if (!userId) {
-        throw new Error("Missing user metadata.");
-    }
+  const userId = session.metadata?.userId;
+  if (!userId) {
+    logger.error("Missing user metadata in session", { sessionId: session.id });
+    throw createError("INVALID_INPUT", "Missing user metadata");
+  }
 
-    const paymentInfo = extractPaymentIntentInfo(session);
+  const quantity = parseInt(session.metadata?.quantity ?? "1", 10);
+  const stripeSessionId = session.id;
+  const amountTotal = session.amount_total ?? 0;
+  const currency = session.currency ?? "usd";
+  const priceId = session.metadata?.priceId ?? process.env.PRICE_ID ?? "";
 
-    if (await isSessionProcessed(paymentInfo.stripeSessionId)) {
-        return;
-    }
+  let paymentIntentId: string | null = null;
+  if (typeof session.payment_intent === "string") {
+    paymentIntentId = session.payment_intent;
+  } else if (session.payment_intent?.id) {
+    paymentIntentId = session.payment_intent.id;
+  }
 
-    await db.transaction(async () => {
-        await ensureCreditBalance(userId);
-        await addCreditsToUser(userId);
-        await recordCreditTransaction(userId, paymentInfo.stripeSessionId);
-        await recordPaymentHistory(userId, paymentInfo, session.payment_status ?? "paid");
+  if (await isSessionProcessed(stripeSessionId)) {
+    logger.info("Session already processed, skipping", { sessionId: session.id });
+    return;
+  }
+
+  const creditsGranted = CREDIT_PACK_AMOUNT * quantity;
+
+  await db.transaction(async (tx) => {
+    await tx
+      .insert(creditBalance)
+      .values({ userId, balance: 0 })
+      .onConflictDoNothing();
+
+    await tx
+      .update(creditBalance)
+      .set({
+        balance: sql`${creditBalance.balance} + ${creditsGranted}`,
+        updatedAt: new Date(),
+      })
+      .where(eq(creditBalance.userId, userId));
+
+    await tx.insert(creditTransaction).values({
+      id: randomUUID(),
+      userId,
+      amount: creditsGranted,
+      reason: "checkout_session_completed",
+      stripeSessionId,
     });
+
+    await tx.insert(paymentHistory).values({
+      id: randomUUID(),
+      userId,
+      stripeSessionId,
+      stripePaymentIntentId: paymentIntentId,
+      priceId,
+      amount: amountTotal,
+      currency,
+      status: session.payment_status ?? "paid",
+      creditsGranted,
+    });
+  });
+
+  logger.stripe("checkout.session.completed", true, {
+    sessionId: session.id,
+    userId,
+    amount: amountTotal,
+    creditsGranted,
+  });
 }
 
 async function constructStripeEvent(payload: string, signature: string): Promise<Stripe.Event> {
-    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
-    if (!webhookSecret) {
-        throw new Error("Webhook secret not configured.");
-    }
+  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+  if (!webhookSecret) {
+    logger.error("STRIPE_WEBHOOK_SECRET not configured");
+    throw createError("CONFIGURATION_ERROR", "Webhook secret not configured");
+  }
 
+  try {
     return stripe.webhooks.constructEvent(payload, signature, webhookSecret);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Invalid signature";
+    logger.error("Webhook signature verification failed", error, { signature: signature.substring(0, 20) });
+    throw createError("INVALID_INPUT", `Webhook verification failed: ${message}`);
+  }
 }
 
 export async function POST(request: Request): Promise<Response> {
+  const startTime = Date.now();
+
+  try {
     const headersList = await headers();
     const signature = headersList.get("stripe-signature");
 
     if (!signature) {
-        return new Response("Missing Stripe signature.", { status: 400 });
+      logger.warn("Missing Stripe signature");
+      throw createError("INVALID_INPUT", "Missing Stripe signature");
     }
 
     const payload = await request.text();
+    const event = await constructStripeEvent(payload, signature);
 
-    let event: Stripe.Event;
+    logger.info("Webhook received", { eventType: event.type, eventId: event.id });
 
-    try {
-        event = await constructStripeEvent(payload, signature);
-    } catch (error) {
-        const message = error instanceof Error ? error.message : "Invalid signature.";
-        return new Response(`Webhook Error: ${message}`, { status: 400 });
+    if (!HANDLED_EVENTS.has(event.type)) {
+      logger.debug("Unhandled event type, ignoring", { eventType: event.type });
+      return new Response("ok", { status: 200 });
     }
 
     if (event.type === "checkout.session.completed") {
-        const session = event.data.object as StripeSession;
+      const session = event.data.object as StripeSession;
 
-        try {
-            await processPayment(session);
-        } catch (error) {
-            console.error("Payment processing error:", error);
-            return new Response("Failed to process payment.", { status: 500 });
-        }
+      try {
+        await processPayment(session);
+      } catch (error) {
+        logger.error("Payment processing failed", error, {
+          sessionId: session.id,
+          userId: session.metadata?.userId,
+        });
+        return new Response("Payment processing failed", { status: 500 });
+      }
     }
 
+    if (event.type === "checkout.session.expired") {
+      const session = event.data.object as StripeSession;
+      logger.stripe("checkout.session.expired", true, {
+        sessionId: session.id,
+        userId: session.metadata?.userId,
+      });
+    }
+
+    const duration = Date.now() - startTime;
+    logger.api("POST", "/api/webhook", 200, duration);
+
     return new Response("ok", { status: 200 });
+  } catch (error) {
+    const duration = Date.now() - startTime;
+
+    if (error instanceof ApplicationError) {
+      logger.api("POST", "/api/webhook", error.statusCode, duration);
+      logger.error("Webhook processing failed", error);
+      return new Response(error.message, { status: error.statusCode });
+    }
+
+    logger.api("POST", "/api/webhook", 500, duration);
+    logger.error("Webhook processing failed with unexpected error", error);
+    return new Response("Internal server error", { status: 500 });
+  }
 }

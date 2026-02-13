@@ -3,7 +3,7 @@ import { Header } from './components/Header';
 import { StyleCard } from './components/StyleCard';
 import { ImageDisplay } from './components/ImageDisplay';
 import { Icons } from './components/Icon';
-import { generateCNYImage } from './services/geminiService';
+import { generateCNYImageUnauthenticated } from './services/geminiService';
 import { STYLES, SUGGESTED_PROMPTS } from './constants';
 import { GenerationConfig, AppMode } from './types';
 
@@ -61,12 +61,19 @@ const App: React.FC = () => {
     }
 
     try {
-      const result = await generateCNYImage({
+      const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+      if (!apiKey) {
+        alert('Please set your Gemini API Key in environment variables.');
+        setIsLoading(false);
+        return;
+      }
+
+      const result = await generateCNYImageUnauthenticated({
         prompt: prompt || "A festive Chinese New Year scene",
         styleId: selectedStyle,
         aspectRatio: aspectRatio,
         imageBase64: uploadedImage || undefined
-      });
+      }, apiKey);
       setGeneratedImage(result);
     } catch (error) {
       console.error(error);

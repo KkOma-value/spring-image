@@ -1,5 +1,6 @@
 "use client";
 
+import { memo, useCallback } from 'react';
 import { StyleOption } from '@/lib/types';
 import { Icons } from './ui/Icons';
 
@@ -9,28 +10,33 @@ interface StyleCardProps {
     onSelect: (id: string) => void;
 }
 
-export const StyleCard = ({ styleOption, isSelected, onSelect }: StyleCardProps) => {
+export const StyleCard = memo(function StyleCard({ styleOption, isSelected, onSelect }: StyleCardProps) {
+    const handleClick = useCallback(() => {
+        onSelect(styleOption.id);
+    }, [onSelect, styleOption.id]);
+
+    const buttonClasses = isSelected
+        ? 'border-cny-gold bg-cny-red/80 shadow-[0_0_15px_rgba(255,215,0,0.5)] scale-[1.02]'
+        : 'border-white/10 bg-black/20 hover:border-white/30 hover:bg-black/30';
+
+    const titleClasses = isSelected ? 'text-cny-gold' : 'text-gray-200';
+
     return (
         <button
-            onClick={() => onSelect(styleOption.id)}
-            className={`relative group overflow-hidden rounded-xl border-2 transition-all duration-300 text-left w-full h-24 sm:h-32 ${isSelected
-                    ? 'border-cny-gold bg-cny-red/80 shadow-[0_0_15px_rgba(255,215,0,0.5)] scale-[1.02]'
-                    : 'border-white/10 bg-black/20 hover:border-white/30 hover:bg-black/30'
-                }`}
+            onClick={handleClick}
+            className={`relative group overflow-hidden rounded-xl border-2 transition-all duration-300 text-left w-full h-24 sm:h-32 ${buttonClasses}`}
         >
             <div className="absolute inset-0 bg-gradient-to-r from-black/80 to-transparent z-10" />
 
-            {/* Background thumbnail */}
-            <div className="absolute right-0 top-0 bottom-0 w-1/2 opacity-30 group-hover:opacity-50 transition-opacity">
-                <div
-                    className="w-full h-full bg-cover bg-center"
-                    style={{ backgroundImage: `url(${styleOption.thumbnail})` }}
-                />
-            </div>
+            {/* Background thumbnail with lazy loading */}
+            <div
+                className="absolute right-0 top-0 bottom-0 w-1/2 opacity-30 group-hover:opacity-50 transition-opacity bg-cover bg-center"
+                style={{ backgroundImage: `url(${styleOption.thumbnail})` }}
+            />
 
             <div className="relative z-20 p-3 h-full flex flex-col justify-center">
                 {isSelected && <Icons.Sparkles className="w-4 h-4 text-cny-gold mb-1 animate-pulse" />}
-                <h3 className={`font-serif font-bold ${isSelected ? 'text-cny-gold' : 'text-gray-200'}`}>
+                <h3 className={`font-serif font-bold ${titleClasses}`}>
                     {styleOption.name}
                 </h3>
                 <p className="text-[10px] text-gray-400 line-clamp-2 mt-1 max-w-[80%] leading-tight">
@@ -39,4 +45,4 @@ export const StyleCard = ({ styleOption, isSelected, onSelect }: StyleCardProps)
             </div>
         </button>
     );
-};
+});
