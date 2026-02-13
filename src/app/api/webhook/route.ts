@@ -6,7 +6,7 @@ import { eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { creditBalance, creditTransaction, paymentHistory } from "@/db/schema/billing";
 import { CREDIT_PACK_AMOUNT } from "@/lib/billing/constants";
-import { stripe } from "@/lib/stripe";
+import { getStripe, STRIPE_SECRET_KEY_NOT_CONFIGURED_MESSAGE } from "@/lib/stripe";
 import { logger } from "@/lib/logger";
 import { createError, ApplicationError } from "@/lib/error-handler";
 
@@ -27,19 +27,29 @@ type StripeSession = Stripe.Checkout.Session & {
   metadata?: StripeSessionMetadata;
 };
 
-async function isSessionProcessed(stripeSessionId: string): Promise<boolean> {
-  const existing = await db
-    .select({ stripeSessionId: paymentHistory.stripeSessionId })
-    .from(paymentHistory)
-    .where(eq(paymentHistory.stripeSessionId, stripeSessionId));
+function getApplicationErrorCauseContext(error: ApplicationError): Record<string, unknown> | undefined {
+  const { cause } = error;
+  if (cause === undefined) {
+    return undefined;
+  }
 
-  return existing.length > 0;
+  if (cause instanceof Error) {
+    return {
+      causeName: cause.name,
+      causeMessage: cause.message,
+      causeStack: cause.stack,
+    };
+  }
+
+  return {
+    cause: String(cause),
+  };
 }
 
 async function processPayment(session: StripeSession): Promise<void> {
   const userId = session.metadata?.userId;
   if (!userId) {
-    logger.error("Missing user metadata in session", { sessionId: session.id });
+    logger.error("Missing user metadata in session", undefined, { sessionId: session.id });
     throw createError("INVALID_INPUT", "Missing user metadata");
   }
 
@@ -56,14 +66,29 @@ async function processPayment(session: StripeSession): Promise<void> {
     paymentIntentId = session.payment_intent.id;
   }
 
-  if (await isSessionProcessed(stripeSessionId)) {
-    logger.info("Session already processed, skipping", { sessionId: session.id });
-    return;
-  }
-
   const creditsGranted = CREDIT_PACK_AMOUNT * quantity;
 
-  await db.transaction(async (tx) => {
+  const wasInserted = await db.transaction(async (tx) => {
+    const insertedPayment = await tx
+      .insert(paymentHistory)
+      .values({
+        id: randomUUID(),
+        userId,
+        stripeSessionId,
+        stripePaymentIntentId: paymentIntentId,
+        priceId,
+        amount: amountTotal,
+        currency,
+        status: session.payment_status ?? "paid",
+        creditsGranted,
+      })
+      .onConflictDoNothing({ target: paymentHistory.stripeSessionId })
+      .returning({ id: paymentHistory.id });
+
+    if (insertedPayment.length === 0) {
+      return false;
+    }
+
     await tx
       .insert(creditBalance)
       .values({ userId, balance: 0 })
@@ -85,18 +110,13 @@ async function processPayment(session: StripeSession): Promise<void> {
       stripeSessionId,
     });
 
-    await tx.insert(paymentHistory).values({
-      id: randomUUID(),
-      userId,
-      stripeSessionId,
-      stripePaymentIntentId: paymentIntentId,
-      priceId,
-      amount: amountTotal,
-      currency,
-      status: session.payment_status ?? "paid",
-      creditsGranted,
-    });
+    return true;
   });
+
+  if (!wasInserted) {
+    logger.info("Session already processed, skipping", { sessionId: session.id });
+    return;
+  }
 
   logger.stripe("checkout.session.completed", true, {
     sessionId: session.id,
@@ -113,12 +133,19 @@ async function constructStripeEvent(payload: string, signature: string): Promise
     throw createError("CONFIGURATION_ERROR", "Webhook secret not configured");
   }
 
+  let stripe;
+  try {
+    stripe = getStripe();
+  } catch (error) {
+    logger.error(STRIPE_SECRET_KEY_NOT_CONFIGURED_MESSAGE, error);
+    throw createError("CONFIGURATION_ERROR", STRIPE_SECRET_KEY_NOT_CONFIGURED_MESSAGE, error);
+  }
+
   try {
     return stripe.webhooks.constructEvent(payload, signature, webhookSecret);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Invalid signature";
     logger.error("Webhook signature verification failed", error, { signature: signature.substring(0, 20) });
-    throw createError("INVALID_INPUT", `Webhook verification failed: ${message}`);
+    throw createError("INVALID_INPUT", "Webhook verification failed", error);
   }
 }
 
@@ -154,7 +181,7 @@ export async function POST(request: Request): Promise<Response> {
           sessionId: session.id,
           userId: session.metadata?.userId,
         });
-        return new Response("Payment processing failed", { status: 500 });
+        throw createError("DATABASE_ERROR", "Payment processing failed", error);
       }
     }
 
@@ -175,7 +202,7 @@ export async function POST(request: Request): Promise<Response> {
 
     if (error instanceof ApplicationError) {
       logger.api("POST", "/api/webhook", error.statusCode, duration);
-      logger.error("Webhook processing failed", error);
+      logger.error("Webhook processing failed", error, getApplicationErrorCauseContext(error));
       return new Response(error.message, { status: error.statusCode });
     }
 

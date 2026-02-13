@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { getServerSession } from "@/lib/auth/get-session";
-import { stripe } from "@/lib/stripe";
+import { getStripe, isStripeConfigured, STRIPE_SECRET_KEY_NOT_CONFIGURED_MESSAGE } from "@/lib/stripe";
 import { logger } from "@/lib/logger";
 import { createError, ApplicationError } from "@/lib/error-handler";
 
@@ -37,6 +37,8 @@ async function createCheckoutSession(
   quantity: number
 ): Promise<string> {
   try {
+    const stripe = getStripe();
+
     const checkoutSession = await stripe.checkout.sessions.create({
       mode: "payment",
       line_items: [{ price: priceId, quantity }],
@@ -84,6 +86,11 @@ export async function POST(request: Request): Promise<NextResponse> {
     }
 
     const { quantity } = validationResult.data;
+    if (!isStripeConfigured()) {
+      logger.error(STRIPE_SECRET_KEY_NOT_CONFIGURED_MESSAGE);
+      throw createError("CONFIGURATION_ERROR", STRIPE_SECRET_KEY_NOT_CONFIGURED_MESSAGE);
+    }
+
     const { priceId, baseUrl } = getStripeConfig();
 
     const url = await createCheckoutSession(
